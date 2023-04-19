@@ -1,19 +1,20 @@
 #include <SimpleTimer.h>
-
+#include <SoftwareSerial.h>
+SoftwareSerial bt(10, 11); // RX | TX
 // asservissement en position angulaire un moteur à courant continu.
 
 SimpleTimer timer;  // Timer pour échantillonnage
 
 //Moteur A
-const int MoteurA1 = 12;     // Commande de sens moteurD
-const int MoteurA2 = 13;     // Commande de sens moteurD
-const int pinPowerA = 9;     // Commande de vitesse moteur
+const int MoteurA1 = 12;     // Commande de sens moteur, Input 1
+const int MoteurA2 = 13;     // Commande de sens moteur, Input 21
+const int pinPowerA = 9;     // Commande de vitesse moteur, Output Enabled1
 const int encoderPinA1 = 3;  // compteur 1
 const int encoderPinA2 = 5;  // compteur 2
 //definition des entrées
-const int MoteurB1 = 8;      // Commande de sens moteurG
-const int MoteurB2 = 7;      // Commande de sens moteurG
-const int pinPowerB = 6;     // Commande de vitesse moteur
+const int MoteurB1 = 8;      // Commande de sens moteur, Input 1
+const int MoteurB2 = 7;      // Commande de sens moteur, Input 2
+const int pinPowerB = 6;     // Commande de vitesse moteur, Output Enabled1
 const int encoderPinB1 = 2;  // compteur 1
 const int encoderPinB2 = 4;  // compteur 2
 bool rotationMG_1 =1;
@@ -21,6 +22,8 @@ bool rotationMG_2 =0;
 bool rotationMD_1 =1;
 bool rotationMD_2 =0;
 //init echantillonage
+unsigned int timeA = 0;
+unsigned int timeB = 0;
 const int frequence_echantillonnage = 20;
 
 //init compteur :
@@ -32,11 +35,11 @@ boolean B1_set = false;
 
 
 //consigne
-double target_cm = 20;
-double target_deg =  17.90 * target_cm;  //1cm=17.90°  ->nb de degré pour la distance
-int target_ticks; 
+double target_cm = 0;
+double target_deg = 17.90 * target_cm;
+int target_ticks;  //plus simple d'asservir en ticks car ce sera toujours un nombre entier
 
-// init calcules asservissement PID
+// init calculs asservissement PID
 int erreurA = 0;  //erreur
 float erreurPrecedenteA = 0;
 float somme_erreurA = 0;
@@ -54,12 +57,14 @@ const float kdA = 0;    // Coefficient dérivateur
 const float kpB = 2.0;  // Coefficient proportionnel (choisis par essais successifs)
 const float kiB = 0;  // Coefficient intégrateur
 const float kdB = 0;  // Coefficient dérivateur
-
-int n=0;
+unsigned long time;
+char command;
+int x=0;
 /* Routine d'initialisation */
 void setup() {
   target_ticks = target_deg * (120.0 * 16.0) / 360.0;
   Serial.begin(38400);  // Initialisation port COM
+  bt.begin(38400);
   //MOTEURA
   pinMode(pinPowerA, OUTPUT);  // Sorties commande moteur
   pinMode(MoteurA1, OUTPUT);
@@ -101,24 +106,36 @@ void setup() {
 /* Fonction principale */
 void loop() {
   timer.run();
-  
-  if(n==1 or n==4 or n==7)
+  time=millis();
+  if(bt.available()) 
   {
-    n++;
-    triangle();
-  }
-  /*
-  
-  if(n==1 or n==4 or n==7 or n==10)
-  {
-    n++;
-    carre();
-  }
-  /*
-  cercle();*/
-  
-}
+    command=bt.read();  
+    Serial.println(command);
+    delay(4000);
+    switch(command)
+    {
+      case 'k':
+      for(int i=0;i<4;i++)
+        {
+          commande(20,1,1);
+          carre();
+        }
+        break;
 
+      case 't' :
+        for(int i=0;i<3;i++)
+        {
+          commande(20,1,1);
+          triangle();
+          delay(2000);
+        }
+      
+      case 'c' :
+        cercle();
+        break;
+      }
+  } 
+}
 //---- Cette fonction est appelée toutes les 20ms pour calcul du correcteur PID
 void asservissement() 
 {
@@ -131,17 +148,17 @@ void asservissement()
   // Calcul de la vitesse courante du moteur
   int vitMoteurA = kpA * erreurA + kdA * (erreurA - erreurPrecedenteA) + kiA * (somme_erreurA);
   erreurPrecedenteA = erreurA;  // Ecrase l'erreur précedente par la nouvelle erreur
-  // Normalisation et contrôle du moteur
+
   int vitMoteurB = kpB * erreurB + kdB * (erreurB - erreurPrecedenteB) + kiB * (somme_erreurB);
   erreurPrecedenteB = erreurB;
 
   if (vitMoteurA > 100) vitMoteurA = 100; 
-  else if (vitMoteurA < -100) vitMoteurA = -100;
-  if (vitMoteurB > 120) vitMoteurB = 120;  
+  else if (vitMoteurA < -100) vitMoteurA = 100;
+  if (vitMoteurB > 120) vitMoteurB = -120;  
   else if (vitMoteurB < -120) vitMoteurB = -120;
 
-  TournerA(vitMoteurA,rotationMD_1,rotationMD_2);        //DROITE
-  TournerB(vitMoteurB,rotationMG_1,rotationMG_2);        //GAUCHE
+  TournerA(vitMoteurA,rotationMD_1,rotationMD_2);        
+  TournerB(vitMoteurB,rotationMG_1,rotationMG_2);        
   float angle_degA = encoder0PosA / 120.0 / 8 * 360; 
   float distanceA = encoder0PosA / 120.0 / 16*360 / 17.90;
   float angle_degB = encoder0PosB / 120.0 / 8.0 * 360;  
@@ -149,20 +166,16 @@ void asservissement()
   
   if(distanceA>=target_cm or distanceB>=target_cm) 
   {  //Arete les moteurs apres avoir fait la distance cible
-    digitalWrite(MoteurA1, LOW);
-    digitalWrite(MoteurA2, LOW);
-    digitalWrite(MoteurB1, LOW);
-    digitalWrite(MoteurB2, LOW);
+    commande(0,0,0);
     delay(2000);
-    commande(20,1,1);
-    n++;
   }
+  
 }
 
 //MOTEUR A
 void doEncoderA1() {
   A1_set = digitalRead(encoderPinA1) == HIGH;
-  encoder0PosA++;  //modifie le compteur selon les deux états des encodeurs
+  encoder0PosA++;  
 }
 //---- Interruption appelée à tous les changements d'état de B
 
@@ -203,20 +216,21 @@ void TournerB(int rapportCyclique,bool rotationMG_1,bool rotationMG_2) {
 }
 
 void carre()
-{   
-  commande((20*3.1415926535)/4,0,1);
+{  
+  delay(5000);
+  commande((20.05*3.1415926535)/4,0,1);  
 }
 
 void cercle()
 {
-   TournerA(120,1,0);
-   delay(12050);
+  TournerA(120,1,0);
+  delay(12050);
 }
 
 
 void triangle()
 {
-  commande((20.05*3.1415926535)/3,0,1); 
+  commande((20.05*3.1415926535)/3,0,1);  
 }
 
 void commande(int distance,int sensrotationG,int sensrotationD )
@@ -253,13 +267,6 @@ void commande(int distance,int sensrotationG,int sensrotationD )
   {
     rotationMD_1=0;
     rotationMD_2=1;
-  }
-  if(sensrotationD==2 and sensrotationG==0)
-  {
-    rotationMD_1=1;
-    rotationMD_2=1;
-    rotationMG_1=0;
-    rotationMG_2=0;
   }
 }
 
